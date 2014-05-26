@@ -1,0 +1,97 @@
+#!/bin/bash
+#The directory below which we want to watermark things
+SOURCE=/usr/share/nginx/html/miceinmybelly/wordpress/wp-content/uploads/
+VIRGIN_DIR=/home/myoung/backup/miceinmybelly/virginImages/
+#Different parameters
+MIN_PSIZE=10
+#Consider these as 1/percentage of image
+MAX_XFRAC=2
+MAX_YFRAC=20
+cd ${SOURCE}
+for image in `find .|grep "\.\(jpg\|png\)$"`
+do
+  echo "File is ${image}"
+  if [ -f ${VIRGIN_DIR}/${image} ]
+  then
+    #Already processed, so do nothing
+    echo "Skipping file ${image}"
+  else
+    #Copy a virgin copy of the image before watermark
+    tgt=${VIRGIN_DIR}/${image}
+    echo "Target is ${tgt}"
+    #Make the directory if it doesn't exist
+    mkdir -p ${tgt%/*}
+    #Copy the file
+    cp -a ${SOURCE}/${image} ${VIRGIN_DIR}/${image}
+    #Check that our file doesn't have the ignore string at start
+    fnom=${tgt##*/}
+    echo "fnom is ${fnom}"
+    if [[ ${fnom} == DONT_WATERMARK* ]]
+    then
+      echo "Skipping ${tgt##*/} because ignore string found"
+    else
+      echo "Calculating appropriate watermark size"
+      #Get geometry of file
+      geom=`identify ${tgt} | cut -f 3 -d \ `
+      x=`echo $geom|cut -f 1 -d x`
+      y=`echo $geom|cut -f 2 -d x`
+      #Make a starting guess at the appropriate point size by assuming point size equals pixel size
+      psize=$((y/MAX_YFRAC))
+      #This is a good starting point, but increase or decrease until the target fraction is reached
+      #Work out how much space this actually takes up
+      tsize=`convert -size ${geom} xc:transparent -font Courier-bold -pointsize ${psize} -draw "gravity south-east fill black text 0,1 'miceinmybelly.com' fill grey70 text 1,0 'miceinmybelly.com'" -trim miff:- |identify -|cut -f 3 -d \ `
+      #True x/y
+      tx=`echo $tsize|cut -f 1 -d x`
+      ty=`echo $tsize|cut -f 2 -d x`
+      #How much horizontal space does this take up?
+      xfrac=$((x/tx))
+      yfrac=$((y/ty))
+      #Are we too big?  If so decrease point size until we have something that works
+      if [[ ( "$xfrac" -lt "$MAX_XFRAC" ) || ( "$yfrac" -lt "$MAX_YFRAC" ) ]]
+      then
+        while [[ ( ( "$xfrac" -lt "$MAX_XFRAC" ) || ( "$yfrac" -lt "$MAX_YFRAC" ) ) && ( "$psize" -ge "$MIN_PSIZE" ) ]]
+        do
+          tmp=$((psize--))
+          tsize=`convert -size ${geom} xc:transparent -font Courier-bold -pointsize ${psize} -draw "gravity south-east fill black text 0,1 'miceinmybelly.com' fill grey70 text 1,0 'miceinmybelly.com'" -trim miff:- |identify -|cut -f 3 -d \ `
+          #True x/y
+          tx=`echo $tsize|cut -f 1 -d x`
+          ty=`echo $tsize|cut -f 2 -d x`
+          #How much horizontal space does this take up?
+          xfrac=$((x/tx))
+          yfrac=$((y/ty))
+        done
+      else
+        #Are we too small?
+        if [[ ( "$xfrac" -gt "$MAX_XFRAC" ) && ( "$yfrac" -gt "$MAX_YFRAC" ) ]]
+        then
+          while [[ ( "$xfrac" -gt "$MAX_XFRAC" ) && ( "$yfrac" -gt "$MAX_YFRAC" ) ]]
+          do 
+            tmp=$((psize++))
+            tsize=`convert -size ${geom} xc:transparent -font Courier-bold -pointsize ${psize} -draw "gravity south-east fill black text 0,1 'miceinmybelly.com' fill grey70 text 1,0 'miceinmybelly.com'" -trim miff:- |identify -|cut -f 3 -d \ `
+            #True x/y
+            tx=`echo $tsize|cut -f 1 -d x`
+            ty=`echo $tsize|cut -f 2 -d x`
+            #How much horizontal space does this take up?
+            xfrac=$((x/tx))
+            yfrac=$((y/ty))
+          done
+          #We want to be under size not over, so move point back a bit
+          tmp=$((psize--))
+        fi
+      fi
+      echo "Concluded a point size of $psize might be a good idea with minimum being $MIN_PSIZE"
+      #Is our point size too small to bother?
+      if [[ ( "$psize" -lt "$MIN_PSIZE" ) ]]
+      then
+        echo "Which is too small to bother with, so doing nothing"
+        #Don't watermark anything if we're too small
+        psize=0
+      else
+        echo "Watermarking the file ${tgt##*/}"
+        #Watermark at appropriate size
+        #read -n 1 -s
+        convert -size $geom xc:transparent -font Courier-bold -pointsize ${psize} -draw "gravity south-east fill black text 0,1 'miceinmybelly.com' fill grey70 text 1,0 'miceinmybelly.com'" miff:- | composite -gravity south -geometry +0+0 - ${tgt} ${SOURCE}/${image}
+      fi
+    fi
+  fi
+done
